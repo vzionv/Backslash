@@ -1,0 +1,16 @@
+{
+  "name": "backslash",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "drizzle-orm": "0.45.2",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
