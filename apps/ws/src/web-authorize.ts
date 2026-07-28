@@ -8,7 +8,7 @@ export interface WebAuthorizationRequest {
   shareToken: string | null;
 }
 
-export interface WebAuthorizationResponse {
+export interface WebAuthorizationGranted {
   access: true;
   userId: string;
   email: string;
@@ -17,10 +17,20 @@ export interface WebAuthorizationResponse {
   isAnonymous: boolean;
 }
 
-function isAuthorizationResponse(value: unknown): value is WebAuthorizationResponse {
+export interface WebAuthorizationDenied {
+  access: false;
+}
+
+export type WebAuthorizationResult =
+  | WebAuthorizationGranted
+  | WebAuthorizationDenied;
+
+function isAuthorizationResult(value: unknown): value is WebAuthorizationResult {
   if (!value || typeof value !== "object") return false;
 
   const candidate = value as Record<string, unknown>;
+  if (candidate.access === false) return true;
+
   return (
     candidate.access === true &&
     typeof candidate.userId === "string" &&
@@ -35,7 +45,7 @@ function isAuthorizationResponse(value: unknown): value is WebAuthorizationRespo
 
 export async function authorizeWithWeb(
   request: WebAuthorizationRequest
-): Promise<WebAuthorizationResponse | null> {
+): Promise<WebAuthorizationResult | null> {
   const config = getInternalWsConfig();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2_500);
@@ -56,7 +66,7 @@ export async function authorizeWithWeb(
     if (!response.ok) return null;
 
     const result: unknown = await response.json();
-    return isAuthorizationResponse(result) ? result : null;
+    return isAuthorizationResult(result) ? result : null;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`[WS] Web authorization request failed: ${message}\n`);

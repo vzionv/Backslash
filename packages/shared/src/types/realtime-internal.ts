@@ -65,7 +65,15 @@ export interface InternalFileEvent {
   };
 }
 
+export interface InternalAccessChangedEvent {
+  type: "access";
+  payload: {
+    projectId: string;
+  };
+}
+
 export type InternalRealtimeEvent =
   | InternalBuildStatusEvent
   | InternalBuildCompleteEvent
-  | InternalFileEvent;
+  | InternalFileEvent
+  | InternalAccessChangedEvent;

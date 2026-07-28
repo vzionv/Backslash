@@ -41,30 +41,44 @@ function runVersionCheck(
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (result: { ok: boolean; output: string }) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
 
     child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf-8");
+      if (stdout.length < 64 * 1024) stdout += chunk.toString("utf-8");
     });
     child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf-8");
+      if (stderr.length < 64 * 1024) stderr += chunk.toString("utf-8");
     });
 
     child.on("error", (err: NodeJS.ErrnoException) => {
-      resolve({ ok: false, output: err.message });
+      finish({ ok: false, output: err.message });
     });
 
     child.on("close", (code) => {
       const output = stdout + stderr;
       if (code === 0 && output.length > 0) {
-        resolve({ ok: true, output: output.trim() });
+        finish({ ok: true, output: output.trim() });
       } else {
-        resolve({
+        finish({
           ok: false,
           output: output.trim() || `exit code ${code}`,
         });
       }
     });
   });
+}
+
+function isPathLikeExecutable(executable: string): boolean {
+  return (
+    path.isAbsolute(executable) ||
+    executable.includes("/") ||
+    executable.includes("\\")
+  );
 }
 
 export async function checkEnvironment(): Promise<EnvironmentCheckResult> {
@@ -82,9 +96,12 @@ export async function checkEnvironment(): Promise<EnvironmentCheckResult> {
     );
   }
 
-  // 1. Check latexmk.exe exists
-  const latexmkExists = await fileExists(compileConfig.latexmkPath);
-  if (!latexmkExists) {
+  // 1. Explicit paths must exist. Bare command names are resolved through PATH
+  // by spawn below; fs.access("latexmk") would incorrectly test the CWD only.
+  const latexmkPathExists = isPathLikeExecutable(compileConfig.latexmkPath)
+    ? await fileExists(compileConfig.latexmkPath)
+    : true;
+  if (!latexmkPathExists) {
     errors.push(
       `latexmk not found at: ${compileConfig.latexmkPath}. Set LATEXMK_PATH or TEXLIVE_BIN.`
     );
@@ -106,8 +123,8 @@ export async function checkEnvironment(): Promise<EnvironmentCheckResult> {
     );
   }
 
-  // 4. Check latexmk -version
-  if (latexmkExists) {
+  // 4. Check latexmk -version. This also verifies PATH lookup for bare names.
+  if (latexmkPathExists) {
     const version = await runVersionCheck(compileConfig.latexmkPath);
     if (!version.ok) {
       errors.push(

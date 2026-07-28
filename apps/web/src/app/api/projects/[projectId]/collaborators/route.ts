@@ -10,6 +10,7 @@ import { eq, and } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { MAX_SMALL_JSON_BODY_BYTES, readJsonBodyResult } from "@/lib/security/request-body";
 import { z } from "zod";
+import { broadcastProjectAccessChanged } from "@/lib/websocket/server";
 
 const shareSchema = z.object({
   email: z.string().email("Invalid email address"),
@@ -156,6 +157,7 @@ export async function POST(
           .set({ role, expiresAt })
           .where(eq(projectShares.id, existing.id))
           .returning();
+        broadcastProjectAccessChanged(projectId);
 
         return NextResponse.json({
           collaborator: {
@@ -182,6 +184,7 @@ export async function POST(
           invitedBy: user.id,
         })
         .returning();
+      broadcastProjectAccessChanged(projectId);
 
       return NextResponse.json(
         {

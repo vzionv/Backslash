@@ -52,3 +52,11 @@
 ## 公开分享
 
 公开分享令牌等同于项目访问凭据。分享响应可包含项目文件和构建日志，但不会包含服务器绝对路径。撤销分享后旧令牌失效；不要把分享链接发布到不可信场所。
+
+## 发布配置保护
+
+- `CORS_ORIGIN=*` 默认拒绝启动；只有同时设置 `CORS_ALLOW_ANY_ORIGIN_ACKNOWLEDGE_RISK=true` 才会接受。局域网部署仍应填写浏览器实际访问的精确 Origin。
+- `LATEX_ALLOW_SHELL_ESCAPE=true` 默认拒绝启动；只有同时设置 `LATEX_SHELL_ESCAPE_ACKNOWLEDGE_RISK=true` 才会接受。该确认变量不是安全措施，只是防止误配置。
+- Web→WS 内部构建事件默认允许 4 MiB，以容纳有界构建日志；可通过 `WS_INTERNAL_MAX_BODY_BYTES` 调整，范围为 64 KiB–16 MiB。内部端口必须保持在 loopback。
+- 协作者权限、公开链接设置或项目删除发生变化时，Web 会要求 WS 立即重新鉴权；WS 也按 `WS_ACCESS_REVALIDATE_INTERVAL_MS`（默认 60 秒）周期性复核已连接客户端，以处理权限到期和遗漏事件。Web 内部鉴权暂时不可用时保留连接并在下一周期重试，明确返回无权限时立即断开。
+- 同一 Socket.IO 连接只能维持一种身份模式。登录账户、其他账户与匿名分享访问之间切换时必须重连，防止身份跨项目泄露。

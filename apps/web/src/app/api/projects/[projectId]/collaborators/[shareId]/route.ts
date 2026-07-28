@@ -6,6 +6,7 @@ import { and, eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { MAX_SMALL_JSON_BODY_BYTES, readJsonBodyResult } from "@/lib/security/request-body";
 import { z } from "zod";
+import { broadcastProjectAccessChanged } from "@/lib/websocket/server";
 
 const updateShareSchema = z.object({
   role: z.enum(["viewer", "editor"]),
@@ -69,6 +70,7 @@ export async function PUT(
         );
       }
 
+      broadcastProjectAccessChanged(projectId);
       return NextResponse.json({ share: updated });
     } catch (error) {
       console.error("Error updating collaborator:", error);
@@ -124,6 +126,7 @@ export async function DELETE(
       }
 
       await db.delete(projectShares).where(eq(projectShares.id, shareId));
+      broadcastProjectAccessChanged(projectId);
 
       return NextResponse.json({ success: true });
     } catch (error) {

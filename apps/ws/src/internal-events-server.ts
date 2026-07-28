@@ -8,7 +8,9 @@ import {
 
 import type { InternalRealtimeEvent } from "./realtime-internal.js";
 
-const MAX_BODY_BYTES = 64 * 1024;
+const DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024;
+const MIN_MAX_BODY_BYTES = 64 * 1024;
+const MAX_MAX_BODY_BYTES = 16 * 1024 * 1024;
 const INTERNAL_KEY_HEADER = "x-backslash-internal-key";
 
 type EmitToUser = (
@@ -21,11 +23,28 @@ type EmitToProject = (
   event: "file:created" | "file:deleted" | "file:saved" | "file:renamed",
   payload: unknown
 ) => void;
+type RefreshProjectAccess = (projectId: string) => void;
 
 interface InternalEventsServerOptions {
   sharedKey: string;
   emitToUser: EmitToUser;
   emitToProject: EmitToProject;
+  refreshProjectAccess: RefreshProjectAccess;
+  maxBodyBytes?: number;
+}
+
+function readMaxBodyBytes(value: number | undefined): number {
+  const raw = value ?? Number(process.env.WS_INTERNAL_MAX_BODY_BYTES || DEFAULT_MAX_BODY_BYTES);
+  if (
+    !Number.isSafeInteger(raw) ||
+    raw < MIN_MAX_BODY_BYTES ||
+    raw > MAX_MAX_BODY_BYTES
+  ) {
+    throw new Error(
+      `WS_INTERNAL_MAX_BODY_BYTES must be an integer between ${MIN_MAX_BODY_BYTES} and ${MAX_MAX_BODY_BYTES}`
+    );
+  }
+  return raw;
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
@@ -48,14 +67,14 @@ function isValidInternalServiceKey(
   return received.length === expected.length && timingSafeEqual(received, expected);
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+async function readJsonBody(request: IncomingMessage, maxBodyBytes: number): Promise<unknown> {
   const chunks: Buffer[] = [];
   let length = 0;
 
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     length += buffer.length;
-    if (length > MAX_BODY_BYTES) throw new Error("Request body too large");
+    if (length > maxBodyBytes) throw new Error("Request body too large");
     chunks.push(buffer);
   }
 
@@ -67,7 +86,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function parseInternalRealtimeEvent(body: unknown): InternalRealtimeEvent | null {
-  if (!isRecord(body) || (body.type !== "build" && body.type !== "file")) {
+  if (
+    !isRecord(body) ||
+    (body.type !== "build" && body.type !== "file" && body.type !== "access")
+  ) {
     return null;
   }
   if (!isRecord(body.payload)) return null;
@@ -80,6 +102,10 @@ function parseInternalRealtimeEvent(body: unknown): InternalRealtimeEvent | null
       !["file:created", "file:deleted", "file:saved", "file:renamed"].includes(payload.type)
   ) {
     return null;
+  }
+
+  if (body.type === "access") {
+    return body as unknown as InternalRealtimeEvent;
   }
 
   if (body.type === "file") {
@@ -112,8 +138,14 @@ function parseInternalRealtimeEvent(body: unknown): InternalRealtimeEvent | null
 function dispatchEvent(
   event: InternalRealtimeEvent,
   emitToUser: EmitToUser,
-  emitToProject: EmitToProject
+  emitToProject: EmitToProject,
+  refreshProjectAccess: RefreshProjectAccess
 ): void {
+  if (event.type === "access") {
+    refreshProjectAccess(event.payload.projectId);
+    return;
+  }
+
   if (event.type === "file") {
     const { payload } = event;
     if (payload.type === "file:created") {
@@ -149,6 +181,7 @@ function dispatchEvent(
 export function createInternalEventsServer(
   options: InternalEventsServerOptions
 ): Server {
+  const maxBodyBytes = readMaxBodyBytes(options.maxBodyBytes);
   return createServer(async (request, response) => {
     if (request.method !== "POST" || request.url !== "/events") {
       sendJson(response, 404, { error: "Not found" });
@@ -163,13 +196,18 @@ export function createInternalEventsServer(
     }
 
     try {
-      const event = parseInternalRealtimeEvent(await readJsonBody(request));
+      const event = parseInternalRealtimeEvent(await readJsonBody(request, maxBodyBytes));
       if (!event) {
         sendJson(response, 400, { error: "Invalid realtime event" });
         return;
       }
 
-      dispatchEvent(event, options.emitToUser, options.emitToProject);
+      dispatchEvent(
+        event,
+        options.emitToUser,
+        options.emitToProject,
+        options.refreshProjectAccess
+      );
       response.writeHead(204);
       response.end();
     } catch (error) {

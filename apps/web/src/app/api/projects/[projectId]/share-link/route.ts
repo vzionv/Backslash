@@ -8,6 +8,7 @@ import { MAX_SMALL_JSON_BODY_BYTES, readJsonBodyResult } from "@/lib/security/re
 import { z } from "zod";
 import { randomBytes } from "crypto";
 import { getApplicationBaseUrl } from "@/lib/http/base-url";
+import { broadcastProjectAccessChanged } from "@/lib/websocket/server";
 
 const updateShareLinkSchema = z.object({
   enabled: z.boolean(),
@@ -156,6 +157,7 @@ export async function PUT(
         await db
           .delete(projectPublicShares)
           .where(eq(projectPublicShares.projectId, projectId));
+        broadcastProjectAccessChanged(projectId);
 
         return NextResponse.json({
           share: {
@@ -198,6 +200,7 @@ export async function PUT(
           })
           .where(eq(projectPublicShares.id, existing.id))
           .returning();
+        broadcastProjectAccessChanged(projectId);
 
         return NextResponse.json({ share: serializeShare(updated, request) });
       }
@@ -211,6 +214,7 @@ export async function PUT(
           expiresAt,
         })
         .returning();
+      broadcastProjectAccessChanged(projectId);
 
       return NextResponse.json(
         { share: serializeShare(created, request) },

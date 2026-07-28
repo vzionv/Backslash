@@ -38,7 +38,7 @@ No production capacity claim is made by this repository. The default configurati
 ## Requirements
 
 - Node.js `>=22.5.0` (Node.js 24 LTS recommended)
-- pnpm 10 or newer
+- pnpm 10.x (the CI baseline)
 - A recent TeX Live installation with `latexmk`
 - `pdfLaTeX` and/or `XeLaTeX`
 - Biber if your documents use Biber-based bibliographies
@@ -122,8 +122,11 @@ The complete configuration reference is available in `.env.example` and `.env.wi
 | `WS_HOST` | `0.0.0.0` | Socket.IO listen address |
 | `WEB_INTERNAL_PORT` | `3010` | Loopback Web authorization port |
 | `WS_INTERNAL_PORT` | `3011` | Loopback WS event-delivery port |
+| `WS_INTERNAL_MAX_BODY_BYTES` | `4194304` | Maximum authenticated internal realtime-event payload |
+| `WS_ACCESS_REVALIDATE_INTERVAL_MS` | `60000` | Interval for rechecking connected clients against current project access |
 | `APP_URL` | `http://localhost:3000` | Browser-visible application origin |
 | `CORS_ORIGIN` | `http://localhost:3000` | Allowed Socket.IO origin or comma-separated origins |
+| `CORS_ALLOW_ANY_ORIGIN_ACKNOWLEDGE_RISK` | `false` | Explicit opt-in required for `CORS_ORIGIN=*` |
 | `BACKSLASH_INTERNAL_SERVICE_KEY` | — | Required shared key for internal service calls |
 | `SESSION_SECRET` | — | Required session-signing and saved-AI-secret key |
 | `SESSION_EXPIRY_DAYS` | `7` | Browser session lifetime in days |
@@ -141,9 +144,13 @@ The complete configuration reference is available in `.env.example` and `.env.wi
 | `COMPILE_LOG_MAX_BYTES` | `10485760` | In-memory compiler output limit |
 | `BUILD_LOG_DB_MAX_BYTES` | `1048576` | Persisted build-log limit |
 | `MAX_CONCURRENT_UPLOADS` | `2` | Maximum simultaneous multipart parsing tasks |
+| `MAX_UPLOAD_FILE_COUNT` | `100` | Maximum files in one multipart upload |
+| `MAX_UPLOAD_BATCH_BYTES` | `104857600` | Maximum total file bytes buffered in one multipart upload |
 | `MAX_PROJECTS_PER_USER` | `100` | Maximum projects owned by one user |
 | `ASYNC_COMPILE_BASE64_PDF_MAX_BYTES` | `10485760` | Maximum PDF size eligible for base64 API output |
 | `MAX_TEXT_CONTENT_BYTES` | `5242880` | Maximum editable text-file size |
+| `LATEX_ALLOW_SHELL_ESCAPE` | `false` | Enables TeX shell escape; unsafe for untrusted sources |
+| `LATEX_SHELL_ESCAPE_ACKNOWLEDGE_RISK` | `false` | Required explicit acknowledgement when shell escape is enabled |
 | `LATEX_MAX_PROJECT_SIZE_MB` | `200` | Maximum project size accepted for compilation |
 | `LATEX_MAX_OUTPUT_SIZE_MB` | `200` | Maximum generated PDF size |
 | `ASYNC_COMPILE_RESULT_TTL_MINUTES` | `60` | One-shot API result retention period |
@@ -201,7 +208,7 @@ pnpm --filter @backslash/web typecheck
 pnpm --filter @backslash/ws typecheck
 pnpm --filter @backslash/web build
 pnpm --filter @backslash/ws build
-bash validate.sh
+bash scripts/validate.sh
 ```
 
 Relevant documentation:
@@ -223,17 +230,23 @@ For deployments that accept untrusted source files:
 - Run the services under a dedicated low-privilege operating-system account.
 - Ensure that account cannot read unrelated secrets or private directories.
 - Apply CPU, memory, process-count, file-count, disk, and outbound-network restrictions.
-- Keep `LATEX_ALLOW_SHELL_ESCAPE=false` unless every author and source file is trusted.
+- Keep `LATEX_ALLOW_SHELL_ESCAPE=false` unless every author and source file is trusted. Enabling it also requires `LATEX_SHELL_ESCAPE_ACKNOWLEDGE_RISK=true`.
+- Do not use `CORS_ORIGIN=*`. If an exceptional trusted deployment requires it, the server also requires `CORS_ALLOW_ANY_ORIGIN_ACKNOWLEDGE_RISK=true`.
 - Use an HTTPS reverse proxy, configure the exact `APP_URL` and `CORS_ORIGIN`, and set `SECURE_COOKIES=true`.
 - Keep the internal Web and WS ports on loopback only.
+- Connected realtime clients are revalidated after share changes and periodically; keep `WS_ACCESS_REVALIDATE_INTERVAL_MS` at a suitably short value for the deployment.
 - Configure request-body and timeout limits at the reverse proxy as well as in the application.
 - Back up both the SQLite database and project-storage directory, and test restoration.
 
 Please report exploitable vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
+## Repository Hygiene
+
+Before creating a public repository, confirm that the commit contains none of the following: `.env`, `.git/` from another repository, PID files, SQLite databases or WAL/SHM sidecars, project storage, compiler output, `.next`, `dist`, or `node_modules`. The supplied `.gitignore` excludes these paths, but it cannot remove files that were already committed. Rotate any secret that has ever appeared in an archive, issue, log, or commit.
+
 ## Project Origin and Acknowledgements
 
-This project is an substantially modified derivative of [Manan-Santoki/Backslash](https://github.com/Manan-Santoki/Backslash), originally created by Manan Santoki and released under the MIT License.
+This project is a substantially modified derivative of [Manan-Santoki/Backslash](https://github.com/Manan-Santoki/Backslash), originally created by Manan Santoki and released under the MIT License.
 
 This edition has been extensively reworked for direct host deployment, native TeX Live compilation, local SQLite persistence, LAN access, bounded resource usage, transactional file operations, and hardened authentication and compilation workflows.
 
@@ -245,4 +258,4 @@ Special thanks to Manan Santoki and all contributors to the original Backslash p
 
 This project is distributed under the [MIT License](LICENSE).
 
-The repository contains substantial portions derived from the original Backslash project. The upstream copyright and license notice must remain in the distributed source and in copies containing substantial portions of that code. See the `LICENSE` file for the complete notices and terms.
+The repository contains substantial portions derived from the original Backslash project. The upstream copyright and license notice must remain in the distributed source and in copies containing substantial portions of that code. See the `LICENSE` file for the complete notices and terms, and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for attribution details.

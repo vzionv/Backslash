@@ -5,6 +5,8 @@ import { randomUUID } from "crypto";
 import { getInternalWsConfig } from "./internal-config.js";
 import { createInternalEventsServer } from "./internal-events-server.js";
 import { authorizeWithWeb } from "./web-authorize.js";
+import { isSocketIdentityCompatible } from "./socket-identity.js";
+import { createCorsPolicy, isCorsOriginAllowed } from "./cors-policy.js";
 
 // ─── Shared Types (inlined to avoid monorepo build issues) ─
 
@@ -98,17 +100,38 @@ function readPort(name: string, fallback: number): number {
   return value;
 }
 
+function readBoundedInteger(
+  name: string,
+  fallback: number,
+  min: number,
+  max: number
+): number {
+  const raw = process.env[name];
+  const value = raw === undefined || raw.trim() === "" ? fallback : Number(raw);
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}`);
+  }
+  return value;
+}
+
 const PORT = readPort("WS_PORT", 3001);
 const CORS_ORIGIN =
   process.env.CORS_ORIGIN || process.env.APP_URL || "http://localhost:3000";
-const ALLOWED_ORIGINS = new Set(
-  CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean)
+const CORS_POLICY = createCorsPolicy(
+  CORS_ORIGIN,
+  process.env.CORS_ALLOW_ANY_ORIGIN_ACKNOWLEDGE_RISK === "true"
 );
 const INTERNAL_CONFIG = getInternalWsConfig();
 const ID_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
 const MAX_CHAT_MESSAGE_CHARS = 4_000;
 const MAX_DOC_CHANGES = 100;
 const MAX_DOC_INSERT_BYTES = 256 * 1024;
+const ACCESS_REVALIDATE_INTERVAL_MS = readBoundedInteger(
+  "WS_ACCESS_REVALIDATE_INTERVAL_MS",
+  60_000,
+  10_000,
+  3_600_000
+);
 
 // ─── Presence Colors ───────────────────────────────
 
@@ -151,8 +174,7 @@ const httpServer = createServer((req, res) => {
 const io = new SocketIOServer<ClientToServerEvents, ServerToClientEvents>(httpServer, {
   cors: {
     origin(origin, callback) {
-      const allowed =
-        !origin || ALLOWED_ORIGINS.has("*") || ALLOWED_ORIGINS.has(origin);
+      const allowed = isCorsOriginAllowed(CORS_POLICY, origin);
       callback(allowed ? null : new Error("Origin not allowed"), allowed);
     },
     credentials: true,
@@ -185,16 +207,11 @@ const presenceMap = new Map<string, Map<string, PresenceUser>>();
 const chatHistory = new Map<string, ChatMessage[]>();
 // Per-project chat read markers: projectId -> Map<userId, ChatReadReceipt>
 const chatReadState = new Map<string, Map<string, ChatReadReceipt>>();
-// Track completed builds we already announced in chat to avoid duplicate spam.
-const buildChatPosted = new Map<string, string>();
-
 const MAX_CHAT_HISTORY = 100;
-const MAX_BUILD_CHAT_POSTED = 1000;
 
 // Track which project each socket is in: socketId -> projectId
 const socketProjectMap = new Map<string, string>();
 const connectedUserSocketCounts = new Map<string, number>();
-const connectedUserNames = new Map<string, string>();
 const projectUserSocketCounts = new Map<string, Map<string, number>>();
 
 interface SocketRateBucket {
@@ -306,22 +323,6 @@ function upsertReadState(
   return receipt;
 }
 
-function formatDuration(durationMs?: number): string {
-  if (!durationMs || durationMs < 0) return "";
-  if (durationMs < 1000) return `${durationMs}ms`;
-  return `${(durationMs / 1000).toFixed(1)}s`;
-}
-
-function rememberBuildChatPosted(buildKey: string, status: string): void {
-  buildChatPosted.set(buildKey, status);
-  if (buildChatPosted.size > MAX_BUILD_CHAT_POSTED) {
-    const oldestKey = buildChatPosted.keys().next().value as string | undefined;
-    if (oldestKey) {
-      buildChatPosted.delete(oldestKey);
-    }
-  }
-}
-
 // ─── Authentication Middleware ──────────────────────
 
 io.use((socket, next) => {
@@ -360,8 +361,24 @@ io.on("connection", (socket) => {
       sessionToken: socket.data.sessionToken ?? null,
       shareToken: socket.data.shareToken ?? null,
     });
-    if (!authorization) {
+    if (!authorization || !authorization.access) {
       console.warn(`[WS] Access denied for project ${projectId}`);
+      return;
+    }
+
+    if (
+      socket.data.userId &&
+      !isSocketIdentityCompatible(
+        {
+          userId: socket.data.userId,
+          isAnonymous: socket.data.isAnonymous === true,
+        },
+        authorization
+      )
+    ) {
+      console.warn(
+        `[WS] Identity change rejected for socket ${socket.id}; reconnect before switching authentication mode or account`
+      );
       return;
     }
 
@@ -376,7 +393,6 @@ io.on("connection", (socket) => {
         authorization.userId,
         (connectedUserSocketCounts.get(authorization.userId) ?? 0) + 1
       );
-      connectedUserNames.set(authorization.userId, authorization.name);
       socket.emit("self:identity", {
         userId: authorization.userId,
         name: authorization.name,
@@ -598,7 +614,6 @@ io.on("connection", (socket) => {
     const remaining = (connectedUserSocketCounts.get(userId) ?? 1) - 1;
     if (remaining <= 0) {
       connectedUserSocketCounts.delete(userId);
-      connectedUserNames.delete(userId);
     } else {
       connectedUserSocketCounts.set(userId, remaining);
     }
@@ -650,15 +665,84 @@ function leaveProject(socket: any, projectId: string) {
   }
 }
 
+const projectsBeingRevalidated = new Set<string>();
+
+async function revalidateProjectAccess(projectId: string): Promise<void> {
+  if (projectsBeingRevalidated.has(projectId)) return;
+  projectsBeingRevalidated.add(projectId);
+
+  try {
+    const sockets = Array.from(io.sockets.sockets.values()).filter(
+      (socket) => socketProjectMap.get(socket.id) === projectId
+    );
+
+    for (const socket of sockets) {
+      const authorization = await authorizeWithWeb({
+        projectId,
+        sessionToken: socket.data.sessionToken ?? null,
+        shareToken: socket.data.shareToken ?? null,
+      });
+
+      // A temporary Web-service error must not create a mass disconnect. The
+      // next interval retries. An explicit access:false result is authoritative.
+      if (authorization === null) continue;
+
+      const currentUserId = socket.data.userId as string | undefined;
+      if (
+        !authorization.access ||
+        !currentUserId ||
+        !isSocketIdentityCompatible(
+          {
+            userId: currentUserId,
+            isAnonymous: socket.data.isAnonymous === true,
+          },
+          authorization
+        )
+      ) {
+        console.warn(
+          `[WS] Realtime access revoked for socket ${socket.id} in project ${projectId}`
+        );
+        leaveProject(socket, projectId);
+        socket.disconnect(true);
+        continue;
+      }
+
+      socket.data.role = authorization.role;
+    }
+  } finally {
+    projectsBeingRevalidated.delete(projectId);
+  }
+}
+
+const accessRevalidationTimer = setInterval(() => {
+  for (const projectId of new Set(socketProjectMap.values())) {
+    void revalidateProjectAccess(projectId);
+  }
+}, ACCESS_REVALIDATE_INTERVAL_MS);
+accessRevalidationTimer.unref?.();
+
+function getPayloadProjectId(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const projectId = (payload as Record<string, unknown>).projectId;
+  return isValidId(projectId) ? projectId : null;
+}
+
 // ─── Start Server ──────────────────────────────────
 
 const internalEventsServer = createInternalEventsServer({
   sharedKey: INTERNAL_CONFIG.sharedKey,
   emitToUser: (userId, event, payload) => {
-    io.to(getUserRoom(userId)).emit(event, payload as never);
+    const projectId = getPayloadProjectId(payload);
+    const target = projectId
+      ? io.to(getUserRoom(userId)).to(getProjectRoom(projectId))
+      : io.to(getUserRoom(userId));
+    target.emit(event, payload as never);
   },
   emitToProject: (projectId, event, payload) => {
     io.to(getProjectRoom(projectId)).emit(event, payload as never);
+  },
+  refreshProjectAccess: (projectId) => {
+    void revalidateProjectAccess(projectId);
   },
 });
 
@@ -679,6 +763,7 @@ httpServer.listen(PORT, INTERNAL_CONFIG.publicHost, () => {
 
 async function shutdown(signal: string) {
   console.log(`\n[WS] Received ${signal}, shutting down...`);
+  clearInterval(accessRevalidationTimer);
 
   // Disconnect all clients
   const sockets = await io.fetchSockets();

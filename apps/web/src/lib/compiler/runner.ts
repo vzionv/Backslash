@@ -21,9 +21,24 @@ import { compileConfig } from "./config";
 import { selectBuildIdsForRetentionCleanup } from "./build-retention";
 import { executeLatexProcess, truncateCompilerLog } from "./process-executor";
 import { copyProjectForCompilation } from "./project-copy";
-import type { Engine } from "@backslash/shared";
+import type { Engine, ParsedLogEntry } from "@backslash/shared";
 
 const STORAGE_PATH = compileConfig.storagePath;
+const MAX_REALTIME_BUILD_ERRORS = 500;
+const MAX_REALTIME_ERROR_MESSAGE_CHARS = 2_000;
+const MAX_REALTIME_ERROR_FILE_CHARS = 512;
+
+function toRealtimeBuildErrors(entries: ParsedLogEntry[]): ParsedLogEntry[] {
+  return entries
+    .filter((entry) => entry.type === "error")
+    .slice(0, MAX_REALTIME_BUILD_ERRORS)
+    .map((entry) => ({
+      ...entry,
+      file: entry.file.slice(0, MAX_REALTIME_ERROR_FILE_CHARS),
+      message: entry.message.slice(0, MAX_REALTIME_ERROR_MESSAGE_CHARS),
+    }));
+}
+
 
 // ─── Types ───────────────────────────────────────────
 
@@ -239,7 +254,7 @@ class CompileRunner {
       const hasErrors = parsedEntries.some((e) => e.type === "error");
       const buildErrors = compileResult.canceled
         ? []
-        : parsedEntries.filter((e) => e.type === "error");
+        : toRealtimeBuildErrors(parsedEntries);
       let pdfExists = false;
       let outputLimitExceeded = false;
       const pdfOutputPath = getPdfPath(storageUserId, projectId, mainFile);

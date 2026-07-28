@@ -54,6 +54,17 @@ done
 validate_secret "SESSION_SECRET" "${SESSION_SECRET:-}"
 validate_secret "BACKSLASH_INTERNAL_SERVICE_KEY" "${BACKSLASH_INTERNAL_SERVICE_KEY:-}"
 
+if [ "${LATEX_ALLOW_SHELL_ESCAPE:-false}" = "true" ] && \
+   [ "${LATEX_SHELL_ESCAPE_ACKNOWLEDGE_RISK:-false}" != "true" ]; then
+  error "LATEX_ALLOW_SHELL_ESCAPE=true requires LATEX_SHELL_ESCAPE_ACKNOWLEDGE_RISK=true"
+  exit 1
+fi
+if [ "${CORS_ORIGIN:-}" = "*" ] && \
+   [ "${CORS_ALLOW_ANY_ORIGIN_ACKNOWLEDGE_RISK:-false}" != "true" ]; then
+  error "CORS_ORIGIN=* requires CORS_ALLOW_ANY_ORIGIN_ACKNOWLEDGE_RISK=true"
+  exit 1
+fi
+
 if [ -n "${LATEXMK_PATH:-}" ]; then
   [ -f "$LATEXMK_PATH" ] || { error "LATEXMK_PATH does not exist: $LATEXMK_PATH"; exit 1; }
 else

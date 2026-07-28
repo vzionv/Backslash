@@ -23,6 +23,9 @@ MAX_CONCURRENT_CLEAN_TASKS=2
 SQLITE_BUSY_TIMEOUT_MS=5000
 SQLITE_WAL_AUTOCHECKPOINT_PAGES=1000
 BUILD_LOG_DB_MAX_BYTES=1048576
+WS_INTERNAL_MAX_BODY_BYTES=4194304
+MAX_CONCURRENT_UPLOADS=2
+MAX_UPLOAD_BATCH_BYTES=104857600
 ```
 
 估算并发时，用真实最重项目测得单次编译峰值 RSS，预留 Web/WS/数据库和操作系统内存，再决定并发。例如单个 XeLaTeX 峰值 300 MiB 的机器，不能仅按 CPU 核数把并发设到几十。
@@ -47,3 +50,7 @@ BUILD_LOG_DB_MAX_BYTES=1048576
 - Socket.IO presence/cursor/chat 状态保存在单个 WS 进程内存中。
 
 支撑数百个账户不等于支撑数百个同时重编译的复杂项目。先用真实项目测量保存、列表、打开、编译和 PDF 浏览的 p95/p99，再按 CPU、内存和磁盘写入能力调整队列。需要多个 Web 写实例或多主机扩容时迁移 PostgreSQL；编译负载进一步增长时拆分为受限 worker，并使用共享任务队列。
+
+## Multipart 内存模型
+
+Next.js 的 `request.formData()` 会在当前进程中解析并持有上传的 `File` 对象，因此上传峰值内存不是流式常量。粗略上界至少应按 `MAX_CONCURRENT_UPLOADS × (MAX_UPLOAD_BATCH_BYTES + multipart overhead)` 估算，再叠加框架复制、文件元数据和其他请求。内存较小的主机应优先降低 `MAX_UPLOAD_BATCH_BYTES` 与 `MAX_CONCURRENT_UPLOADS`，并在反向代理设置不高于应用限制的请求体上限。

@@ -89,20 +89,6 @@ export interface BuildCompletePayload {
 
 export type BuildUpdatePayload = BuildStatusPayload | BuildCompletePayload;
 
-/**
- * Type guard — returns true when the payload represents a completed build.
- */
-export function isBuildComplete(
-  payload: BuildUpdatePayload
-): payload is BuildCompletePayload {
-  return (
-    payload.status === "success" ||
-    payload.status === "error" ||
-    payload.status === "timeout" ||
-    payload.status === "canceled"
-  );
-}
-
 // ─── Room Naming ───────────────────────────────────
 
 export function getUserRoom(userId: string): string {
@@ -138,12 +124,7 @@ export function broadcastBuildUpdate(
     }
   }
 
-  if (isBuildComplete(payload)) {
-    postInternalEvent({ type: "build", userId, payload });
-    return;
-  }
-
-  postInternalEvent({ type: "build", userId, payload });
+  postInternalEvent({ type: "build", userId, payload } as InternalRealtimeEvent);
 }
 
 // ─── File Events ───────────────────────────────────
@@ -180,4 +161,15 @@ export function broadcastFileEvent(payload: FileEventPayload): void {
   }
 
   postInternalEvent({ type: "file", payload });
+}
+
+// ─── Access Changes ───────────────────────────────
+
+/**
+ * Requests immediate revalidation of every connected socket in a project.
+ * Used after collaborator or public-share changes so revoked/expired access
+ * does not remain active until the browser reconnects.
+ */
+export function broadcastProjectAccessChanged(projectId: string): void {
+  postInternalEvent({ type: "access", payload: { projectId } });
 }

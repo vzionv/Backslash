@@ -32,9 +32,12 @@ yarn-error.log*
 apps/web/data/
 .backslash-*.pid
 
-.claude/
-
 # AI tooling
 graphify-out/
 .playwright-cli/
 .claude/
+
+# Runtime
+*.db-wal
+*.db-shm
+audit-output/

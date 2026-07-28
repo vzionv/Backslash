@@ -127,9 +127,6 @@ export async function resolveProjectAccessFromCredentials(
 export async function authorizeRealtimeClient(
   request: RealtimeAuthorizationRequest
 ): Promise<RealtimeAuthorizationResponse> {
-  const session = request.sessionToken
-    ? await validateSession(request.sessionToken)
-    : null;
   const access = await resolveProjectAccessFromCredentials(
     request.projectId,
     request.sessionToken,
@@ -137,7 +134,10 @@ export async function authorizeRealtimeClient(
   );
   if (!access.access) return { access: false };
 
-  const user = session?.user ?? access.user;
+  // Use the identity attached to the access decision. A valid session that has
+  // no project membership may still fall back to a public share token; exposing
+  // that session user here would leak their account identity into the share room.
+  const user = access.user;
   if (user) {
     return {
       access: true,

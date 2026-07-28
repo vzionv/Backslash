@@ -37,6 +37,19 @@ function resolveLatexmkPath(): string {
   return path.join(bin, process.platform === "win32" ? "latexmk.exe" : "latexmk");
 }
 
+function resolveAllowShellEscape(): boolean {
+  const enabled = process.env.LATEX_ALLOW_SHELL_ESCAPE === "true";
+  if (
+    enabled &&
+    process.env.LATEX_SHELL_ESCAPE_ACKNOWLEDGE_RISK !== "true"
+  ) {
+    throw new Error(
+      "LATEX_ALLOW_SHELL_ESCAPE=true requires LATEX_SHELL_ESCAPE_ACKNOWLEDGE_RISK=true"
+    );
+  }
+  return enabled;
+}
+
 function resolveDefaultEngine(): Exclude<Engine, "auto"> {
   const engine = (process.env.DEFAULT_LATEX_ENGINE || "xelatex") as Exclude<
     Engine,
@@ -80,7 +93,7 @@ export const compileConfig = {
     process.env.LATEX_TEMP_ROOT || path.join(STORAGE_PATH, "compile-temp"),
   outputRoot:
     process.env.LATEX_OUTPUT_ROOT || path.join(STORAGE_PATH, "compile-output"),
-  allowShellEscape: process.env.LATEX_ALLOW_SHELL_ESCAPE === "true",
+  allowShellEscape: resolveAllowShellEscape(),
   haltOnError: process.env.LATEX_HALT_ON_ERROR !== "false",
   maxProjectSizeMB: readBoundedInteger("LATEX_MAX_PROJECT_SIZE_MB", 200, {
     min: 1,

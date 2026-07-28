@@ -25,10 +25,12 @@ describe("WS internal event server", () => {
   it("maps build and file events to the established rooms and socket payloads", async () => {
     const emitToUser = vi.fn();
     const emitToProject = vi.fn();
+    const refreshProjectAccess = vi.fn();
     const server = createInternalEventsServer({
       sharedKey: "test-internal-key",
       emitToUser,
       emitToProject,
+      refreshProjectAccess,
     });
     const baseUrl = await startServer(server);
 
@@ -70,9 +72,21 @@ describe("WS internal event server", () => {
         },
       }),
     });
+    const accessResponse = await fetch(`${baseUrl}/events`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-backslash-internal-key": "test-internal-key",
+      },
+      body: JSON.stringify({
+        type: "access",
+        payload: { projectId: "project-1" },
+      }),
+    });
 
     expect(buildResponse.status).toBe(204);
     expect(fileResponse.status).toBe(204);
+    expect(accessResponse.status).toBe(204);
     expect(emitToUser).toHaveBeenCalledWith(
       "user-1",
       "build:complete",
@@ -90,6 +104,7 @@ describe("WS internal event server", () => {
         },
       }
     );
+    expect(refreshProjectAccess).toHaveBeenCalledWith("project-1");
   });
 
   it("rejects invalid shared keys and malformed events", async () => {
@@ -97,6 +112,7 @@ describe("WS internal event server", () => {
       sharedKey: "test-internal-key",
       emitToUser: vi.fn(),
       emitToProject: vi.fn(),
+      refreshProjectAccess: vi.fn(),
     });
     const baseUrl = await startServer(server);
 
@@ -113,4 +129,73 @@ describe("WS internal event server", () => {
     expect(unauthorized.status).toBe(401);
     expect(invalid.status).toBe(400);
   });
+  it("accepts build payloads larger than the old 64 KiB limit", async () => {
+    const emitToUser = vi.fn();
+    const server = createInternalEventsServer({
+      sharedKey: "test-internal-key",
+      emitToUser,
+      emitToProject: vi.fn(),
+      refreshProjectAccess: vi.fn(),
+    });
+    const baseUrl = await startServer(server);
+
+    const response = await fetch(`${baseUrl}/events`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-backslash-internal-key": "test-internal-key",
+      },
+      body: JSON.stringify({
+        type: "build",
+        userId: "user-1",
+        payload: {
+          projectId: "project-1",
+          buildId: "build-large",
+          status: "error",
+          pdfUrl: null,
+          logs: "x".repeat(128 * 1024),
+          durationMs: 42,
+          errors: [],
+        },
+      }),
+    });
+
+    expect(response.status).toBe(204);
+    expect(emitToUser).toHaveBeenCalledOnce();
+  });
+
+  it("rejects payloads above the configured internal-event limit", async () => {
+    const server = createInternalEventsServer({
+      sharedKey: "test-internal-key",
+      emitToUser: vi.fn(),
+      emitToProject: vi.fn(),
+      refreshProjectAccess: vi.fn(),
+      maxBodyBytes: 64 * 1024,
+    });
+    const baseUrl = await startServer(server);
+
+    const response = await fetch(`${baseUrl}/events`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-backslash-internal-key": "test-internal-key",
+      },
+      body: JSON.stringify({
+        type: "build",
+        userId: "user-1",
+        payload: {
+          projectId: "project-1",
+          buildId: "build-too-large",
+          status: "error",
+          pdfUrl: null,
+          logs: "x".repeat(80 * 1024),
+          durationMs: 42,
+          errors: [],
+        },
+      }),
+    });
+
+    expect(response.status).toBe(413);
+  });
+
 });

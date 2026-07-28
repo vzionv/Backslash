@@ -4,7 +4,11 @@
   "private": true,
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "build": "pnpm --filter @backslash/web build && pnpm --filter @backslash/ws build",
+    "validate": "bash scripts/validate.sh",
+    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm validate"
   },
   "devDependencies": {
     "drizzle-orm": "0.45.2",

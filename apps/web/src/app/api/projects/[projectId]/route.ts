@@ -9,6 +9,7 @@ import { eq, desc } from "drizzle-orm";
 import { deleteOwnedProject, ProjectOperationError } from "@/lib/storage/project-operations";
 import { NextRequest, NextResponse } from "next/server";
 import { MAX_SMALL_JSON_BODY_BYTES, readJsonBodyResult } from "@/lib/security/request-body";
+import { broadcastProjectAccessChanged } from "@/lib/websocket/server";
 
 // ─── GET /api/projects/[projectId] ─────────────────
 // Get project details with file list and last build.
@@ -138,6 +139,7 @@ export async function DELETE(
     try {
       const { projectId } = await params;
       await deleteOwnedProject({ projectId, ownerUserId: user.id });
+      broadcastProjectAccessChanged(projectId);
       return NextResponse.json({ success: true });
     } catch (error) {
       if (error instanceof ProjectOperationError) {

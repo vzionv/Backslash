@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "http";
 import type { AddressInfo } from "net";
 
-import { broadcastBuildUpdate } from "../../apps/web/src/lib/websocket/server";
+import {
+  broadcastBuildUpdate,
+  broadcastProjectAccessChanged,
+} from "../../apps/web/src/lib/websocket/server";
 
 const servers: Server[] = [];
 const originalEnvironment = {
@@ -42,7 +45,7 @@ describe("Web realtime broadcasts", () => {
   it("posts the existing build payload to the WS loopback event endpoint", async () => {
     const received = vi.fn();
     const port = await startEventReceiver(received);
-    process.env.BACKSLASH_INTERNAL_SERVICE_KEY = "test-internal-key";
+    process.env.BACKSLASH_INTERNAL_SERVICE_KEY = "test-internal-key-0123456789abcdef";
     process.env.WS_INTERNAL_PORT = String(port);
 
     broadcastBuildUpdate("user-1", {
@@ -68,6 +71,22 @@ describe("Web realtime broadcasts", () => {
         durationMs: 42,
         errors: [],
       },
+    });
+  });
+
+
+  it("posts project access changes for immediate socket revalidation", async () => {
+    const received = vi.fn();
+    const port = await startEventReceiver(received);
+    process.env.BACKSLASH_INTERNAL_SERVICE_KEY = "test-internal-key-0123456789abcdef";
+    process.env.WS_INTERNAL_PORT = String(port);
+
+    broadcastProjectAccessChanged("project-1");
+
+    await vi.waitFor(() => expect(received).toHaveBeenCalledTimes(1));
+    expect(received).toHaveBeenCalledWith({
+      type: "access",
+      payload: { projectId: "project-1" },
     });
   });
 

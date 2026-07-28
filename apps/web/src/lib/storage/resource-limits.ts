@@ -1,7 +1,32 @@
 import { LIMITS } from "@backslash/shared";
 
-export const MAX_UPLOAD_FILE_COUNT = 100;
-export const MAX_UPLOAD_BATCH_BYTES = LIMITS.MAX_PROJECT_SIZE;
+function readBoundedInteger(
+  name: string,
+  fallback: number,
+  min: number,
+  max: number
+): number {
+  const raw = process.env[name];
+  if (!raw || raw.trim() === "") return fallback;
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}`);
+  }
+  return parsed;
+}
+
+export const MAX_UPLOAD_FILE_COUNT = readBoundedInteger(
+  "MAX_UPLOAD_FILE_COUNT",
+  100,
+  1,
+  1_000
+);
+export const MAX_UPLOAD_BATCH_BYTES = readBoundedInteger(
+  "MAX_UPLOAD_BATCH_BYTES",
+  LIMITS.MAX_PROJECT_SIZE,
+  1024 * 1024,
+  LIMITS.MAX_PROJECT_SIZE
+);
 function readTextContentLimit(): number {
   const raw = process.env.MAX_TEXT_CONTENT_BYTES;
   if (!raw) return 5 * 1024 * 1024;
