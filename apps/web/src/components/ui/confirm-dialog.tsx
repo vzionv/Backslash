@@ -10,6 +10,8 @@ interface ConfirmDialogProps {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  secondaryLabel?: string;
+  onSecondary?: () => void;
   variant?: "danger" | "default";
   /** When true, only shows a single dismiss button (alert mode). */
   alert?: boolean;
@@ -23,6 +25,8 @@ export function ConfirmDialog({
   message,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
+  secondaryLabel,
+  onSecondary,
   variant = "default",
   alert = false,
   onConfirm,
@@ -72,13 +76,24 @@ export function ConfirmDialog({
 
         <div className="flex items-center justify-end gap-2">
           {!alert && (
-            <button
-              type="button"
-              onClick={onCancel}
-              className="rounded-lg border border-border bg-bg-secondary px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-bg-elevated"
-            >
-              {cancelLabel}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={onCancel}
+                className="rounded-lg border border-border bg-bg-secondary px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-bg-elevated"
+              >
+                {cancelLabel}
+              </button>
+              {secondaryLabel && onSecondary && (
+                <button
+                  type="button"
+                  onClick={onSecondary}
+                  className="rounded-lg border border-border bg-bg-secondary px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-bg-elevated"
+                >
+                  {secondaryLabel}
+                </button>
+              )}
+            </>
           )}
           <button
             ref={confirmRef}

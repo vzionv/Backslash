@@ -153,6 +153,7 @@ export async function renameProjectFilePath(options: {
   projectId: string;
   fileId: string;
   newPath: string;
+  conflict?: "overwrite" | "rename" | "cancel";
   expectedOwnerUserId?: string;
 }): Promise<{
   file: ProjectFileRow;
@@ -173,14 +174,39 @@ export async function renameProjectFilePath(options: {
       .where(eq(projectFiles.projectId, options.projectId));
     const target = files.find((entry) => entry.id === options.fileId);
     if (!target) throw new ProjectFileOperationError("File not found", 404);
+    const caseSensitive = process.platform !== "win32";
+    const pathKey = (filePath: string) => caseSensitive
+      ? filePath
+      : filePath.toLocaleLowerCase("en-US");
+    const occupiedPaths = new Set(files.map((entry) => pathKey(entry.path)));
+    let targetPath = options.newPath;
+    if (options.conflict === "rename" && occupiedPaths.has(pathKey(targetPath))) {
+      const slash = targetPath.lastIndexOf("/");
+      const directory = slash >= 0 ? targetPath.slice(0, slash + 1) : "";
+      const filename = slash >= 0 ? targetPath.slice(slash + 1) : targetPath;
+      const extensionIndex = filename.lastIndexOf(".");
+      const stem = extensionIndex > 0 ? filename.slice(0, extensionIndex) : filename;
+      const extension = extensionIndex > 0 ? filename.slice(extensionIndex) : "";
+      let counter = 1;
+      do {
+        const suffix = counter === 1 ? " copy" : ` copy ${counter}`;
+        targetPath = `${directory}${stem}${suffix}${extension}`;
+        counter += 1;
+      } while (occupiedPaths.has(pathKey(targetPath)) && counter < 10000);
+    }
+    const destination = files.find((entry) => pathKey(entry.path) === pathKey(targetPath));
+    const deleteIds = options.conflict === "overwrite" && destination && !destination.isDirectory
+      ? [destination.id]
+      : [];
 
     let plan;
     try {
       plan = buildProjectFileRenamePlan({
         files,
         fileId: options.fileId,
-        newPath: options.newPath,
+        newPath: targetPath,
         mainFile: project.mainFile,
+        conflict: options.conflict ?? "cancel",
       });
     } catch (error) {
       if (error instanceof ProjectFileMutationConflictError) {
@@ -195,13 +221,17 @@ export async function renameProjectFilePath(options: {
 
     const projectDir = storage.getProjectDir(project.userId, options.projectId);
     await assertProjectPathHasNoSymlink(projectDir, target.path);
-    await assertProjectPathHasNoSymlink(projectDir, options.newPath);
+    await assertProjectPathHasNoSymlink(projectDir, targetPath);
     const oldFullPath = resolveProjectPath(projectDir, target.path);
-    const newFullPath = resolveProjectPath(projectDir, options.newPath);
+    const newFullPath = resolveProjectPath(projectDir, targetPath);
 
     let diskMutation: storage.StagedPathMutation;
     try {
-      diskMutation = await storage.stagePathMove(oldFullPath, newFullPath);
+      diskMutation = await storage.stagePathMove(
+        oldFullPath,
+        newFullPath,
+        options.conflict === "overwrite"
+      );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
         throw new ProjectFileOperationError(
@@ -216,6 +246,7 @@ export async function renameProjectFilePath(options: {
     try {
       applyProjectFileRename({
         projectId: options.projectId,
+        deleteIds,
         updates: plan.updates.map((update) => ({
           id: update.id,
           newPath: update.newPath,
@@ -231,7 +262,7 @@ export async function renameProjectFilePath(options: {
     await diskMutation.commit();
 
     return {
-      file: { ...target, path: options.newPath, updatedAt },
+      file: { ...target, path: targetPath, updatedAt },
       oldPath: target.path,
       mainFile: plan.nextMainFile,
     };
@@ -412,6 +443,25 @@ export interface ProjectUploadItem {
   path: string;
 }
 
+export type ProjectFileConflictStrategy = "overwrite" | "rename" | "cancel";
+
+function getUniqueUploadPath(originalPath: string, occupied: Set<string>): string {
+  const slash = originalPath.lastIndexOf("/");
+  const directory = slash >= 0 ? originalPath.slice(0, slash + 1) : "";
+  const filename = slash >= 0 ? originalPath.slice(slash + 1) : originalPath;
+  const extensionIndex = filename.lastIndexOf(".");
+  const stem = extensionIndex > 0 ? filename.slice(0, extensionIndex) : filename;
+  const extension = extensionIndex > 0 ? filename.slice(extensionIndex) : "";
+  let candidate = `${directory}${stem} copy${extension}`;
+  let counter = 2;
+  while (occupied.has(candidate)) {
+    candidate = `${directory}${stem} copy ${counter}${extension}`;
+    counter += 1;
+  }
+  occupied.add(candidate);
+  return candidate;
+}
+
 export interface ProjectUploadResult {
   files: ProjectFileRow[];
   events: Array<{
@@ -425,6 +475,7 @@ export interface ProjectUploadResult {
 export async function uploadProjectFiles(options: {
   projectId: string;
   uploads: ProjectUploadItem[];
+  conflict?: ProjectFileConflictStrategy;
   expectedOwnerUserId?: string;
 }): Promise<ProjectUploadResult> {
   return withProjectMutationLock(options.projectId, async () => {
@@ -442,9 +493,31 @@ export async function uploadProjectFiles(options: {
     const existingByPath = new Map<string, ProjectFileRow>(
       existingFiles.map((entry) => [entry.path, entry])
     );
-    const uploadPaths = new Set(options.uploads.map((upload) => upload.path));
+    const conflict = options.conflict ?? "cancel";
+    const conflictingPaths = options.uploads
+      .filter((upload) => existingByPath.get(upload.path)?.isDirectory === false)
+      .map((upload) => upload.path);
+    if (conflict === "cancel" && conflictingPaths.length > 0) {
+      throw new ProjectFileOperationError(
+        `File already exists at '${conflictingPaths[0]}'`,
+        409
+      );
+    }
+
+    const occupiedUploadPaths = new Set(existingByPath.keys());
+    const resolvedUploads: ProjectUploadItem[] = conflict === "rename"
+      ? options.uploads.map((upload) => {
+          if (!occupiedUploadPaths.has(upload.path)) {
+            occupiedUploadPaths.add(upload.path);
+            return upload;
+          }
+          const renamedPath = getUniqueUploadPath(upload.path, occupiedUploadPaths);
+          return { ...upload, path: renamedPath };
+        })
+      : options.uploads;
+    const uploadPaths = new Set(resolvedUploads.map((upload) => upload.path));
     const { directoryPaths } = buildUploadPlan(
-      options.uploads.map((upload) => upload.path)
+      resolvedUploads.map((upload) => upload.path)
     );
 
     for (const directoryPath of directoryPaths) {
@@ -462,7 +535,7 @@ export async function uploadProjectFiles(options: {
         );
       }
     }
-    for (const upload of options.uploads) {
+    for (const upload of resolvedUploads) {
       const existing = existingByPath.get(upload.path);
       if (existing?.isDirectory) {
         throw new ProjectFileOperationError(
@@ -478,7 +551,7 @@ export async function uploadProjectFiles(options: {
         sizeBytes: entry.sizeBytes ?? 0,
         isDirectory: entry.isDirectory ?? false,
       })),
-      options.uploads.map((upload) => ({
+      resolvedUploads.map((upload) => ({
         path: upload.path,
         sizeBytes: upload.file.size,
       }))
@@ -497,7 +570,7 @@ export async function uploadProjectFiles(options: {
     }> = [];
 
     try {
-      for (const upload of options.uploads) {
+      for (const upload of resolvedUploads) {
         await assertProjectPathHasNoSymlink(projectDir, upload.path);
         const fullPath = resolveProjectPath(projectDir, upload.path);
         staged.push({
@@ -526,7 +599,7 @@ export async function uploadProjectFiles(options: {
     const directoryRecords = directoryPaths
       .filter((directoryPath) => !existingByPath.has(directoryPath))
       .map((directoryPath) => ({ id: uuidv4(), path: directoryPath }));
-    const fileRecords = options.uploads.map((upload) => {
+    const fileRecords = resolvedUploads.map((upload) => {
       const existing = existingByPath.get(upload.path);
       const extension = path.extname(upload.path).toLowerCase();
       return {

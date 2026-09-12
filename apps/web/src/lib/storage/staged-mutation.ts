@@ -218,27 +218,40 @@ export async function stagePathRemoval(
 
 export async function stagePathMove(
   oldPath: string,
-  newPath: string
+  newPath: string,
+  replaceExisting = false
 ): Promise<StagedPathMutation> {
   await pruneStaleMutationArtifacts();
   const stagingPath = path.join(
     MUTATION_STAGING_PATH,
     `${randomUUID()}.moving`
   );
+  const destinationBackupPath = path.join(
+    MUTATION_STAGING_PATH,
+    `${randomUUID()}.destination`
+  );
   await fs.mkdir(MUTATION_STAGING_PATH, { recursive: true });
   await fs.rename(oldPath, stagingPath);
+  let hadDestination = false;
 
   try {
     if (await fileExists(newPath)) {
-      const error = new Error("Destination already exists") as NodeJS.ErrnoException;
-      error.code = "EEXIST";
-      throw error;
+      if (!replaceExisting) {
+        const error = new Error("Destination already exists") as NodeJS.ErrnoException;
+        error.code = "EEXIST";
+        throw error;
+      }
+      await fs.rename(newPath, destinationBackupPath);
+      hadDestination = true;
     }
     await fs.mkdir(path.dirname(newPath), { recursive: true });
     await fs.rename(stagingPath, newPath);
   } catch (error) {
     await fs.mkdir(path.dirname(oldPath), { recursive: true });
     try {
+      if (hadDestination) {
+        await fs.rename(destinationBackupPath, newPath);
+      }
       await fs.rename(stagingPath, oldPath);
     } catch (restoreError) {
       throw new AggregateError(
@@ -252,12 +265,20 @@ export async function stagePathMove(
   let settled = false;
   return {
     async commit() {
+      if (settled) return;
+      if (hadDestination) {
+        await fs.rm(destinationBackupPath, { recursive: true, force: true });
+      }
       settled = true;
     },
     async rollback() {
       if (settled) return;
       await fs.mkdir(path.dirname(oldPath), { recursive: true });
       await fs.rename(newPath, oldPath);
+      if (hadDestination) {
+        await fs.mkdir(path.dirname(newPath), { recursive: true });
+        await fs.rename(destinationBackupPath, newPath);
+      }
       settled = true;
     },
   };

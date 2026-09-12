@@ -36,6 +36,7 @@ export function buildProjectFileRenamePlan(options: {
   newPath: string;
   mainFile: string;
   caseSensitive?: boolean;
+  conflict?: "overwrite" | "rename" | "cancel";
 }): ProjectFileRenamePlan {
   const caseSensitive = options.caseSensitive ?? process.platform !== "win32";
   const target = options.files.find((entry) => entry.id === options.fileId);
@@ -74,7 +75,12 @@ export function buildProjectFileRenamePlan(options: {
       const nextPath = suffix ? `${options.newPath}/${suffix}` : options.newPath;
       const key = pathKey(nextPath, caseSensitive);
 
-      if (occupied.has(key) || generated.has(key)) {
+      const occupiedEntry = occupied.get(key);
+      if (
+        (occupiedEntry && options.conflict !== "overwrite") ||
+        (occupiedEntry?.isDirectory ?? false) ||
+        generated.has(key)
+      ) {
         throw new ProjectFileMutationConflictError(
           `A file already exists at '${nextPath}'`
         );

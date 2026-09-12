@@ -44,7 +44,11 @@ export async function POST(
     }
 
     const uploads = await parseProjectUploadRequest(request);
-    const result = await uploadProjectFiles({ projectId, uploads });
+    const conflictValue = request.nextUrl.searchParams.get("conflict");
+    const conflict = conflictValue === "overwrite" || conflictValue === "rename"
+      ? conflictValue
+      : "cancel";
+    const result = await uploadProjectFiles({ projectId, uploads, conflict });
     const actorUserId = access.user?.id ?? "anonymous";
     for (const event of result.events) {
       broadcastFileEvent({

@@ -152,6 +152,7 @@ export async function PUT(
     const actorUserId = access.user?.id ?? null;
     const buildUserId = access.user?.id ?? saved.storageUserId;
     let buildQueued = false;
+    let buildId: string | null = null;
     let compileWarning: string | null = null;
 
     const compileRateLimited = autoCompile
@@ -167,12 +168,13 @@ export async function PUT(
         "Compilation rate limit reached; the file was saved but not compiled.";
     } else if (autoCompile) {
       try {
-        await queueProjectCompile({
+        const queued = await queueProjectCompile({
           projectId,
           buildUserId,
           storageUserId: saved.storageUserId,
           triggeredByUserId: actorUserId,
         });
+        buildId = queued.buildId;
         buildQueued = true;
       } catch (error) {
         const queueFull = error instanceof CompileQueueFullError;
@@ -199,6 +201,7 @@ export async function PUT(
     return NextResponse.json({
       file: saved.file,
       buildQueued,
+      buildId,
       compileWarning,
     });
   } catch (error) {
@@ -249,6 +252,7 @@ export async function PATCH(
       projectId,
       fileId,
       newPath: parsed.data.newPath,
+      conflict: parsed.data.conflict,
     });
 
     broadcastFileEvent({

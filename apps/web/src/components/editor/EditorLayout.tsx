@@ -193,6 +193,10 @@ export function EditorLayout({
   // When a save+compile is requested while already compiling, set this flag.
   // After the current build completes successfully, we'll trigger a recompile.
   const pendingRecompileRef = useRef(false);
+  const activeBuildIdRef = useRef<string | null>(
+    initialBuildMaybeRunning ? initialBuild?.id ?? null : null
+  );
+  const handledBuildIdsRef = useRef<Set<string>>(new Set());
   // Track autoCompileEnabled via ref for use in WS callbacks
   const autoCompileEnabledRef = useRef(autoCompileEnabled);
   autoCompileEnabledRef.current = autoCompileEnabled;
@@ -494,15 +498,23 @@ export function EditorLayout({
   const startBuildPolling = useCallback(() => {
     clearAllPolling();
 
+    let pollInFlight = false;
     pollIntervalRef.current = setInterval(async () => {
+      if (pollInFlight) return;
+      pollInFlight = true;
       try {
-        const logsRes = await fetch(withShareToken(`/api/projects/${project.id}/logs`), {
+        const buildId = activeBuildIdRef.current;
+        const logsUrl = buildId
+          ? `/api/projects/${project.id}/logs?buildId=${encodeURIComponent(buildId)}`
+          : `/api/projects/${project.id}/logs`;
+        const logsRes = await fetch(withShareToken(logsUrl), {
           cache: "no-store",
         });
         if (!logsRes.ok) return;
 
         const logsData = await logsRes.json();
         const build = logsData.build;
+        if (buildId && build.id !== buildId) return;
 
         if (
           build.status === "success" ||
@@ -514,6 +526,8 @@ export function EditorLayout({
 
           // Only update if still compiling (WS may have handled it)
           if (!compilingRef.current) return;
+          if (handledBuildIdsRef.current.has(build.id)) return;
+          handledBuildIdsRef.current.add(build.id);
 
           setBuildStatus(build.status);
           setBuildLogs(build.logs ?? "");
@@ -564,6 +578,8 @@ export function EditorLayout({
         }
       } catch {
         // Polling error — keep trying
+      } finally {
+        pollInFlight = false;
       }
     }, 1500);
 
@@ -660,6 +676,7 @@ export function EditorLayout({
       }
     },
     onBuildStatus: (data) => {
+      if (activeBuildIdRef.current && data.buildId !== activeBuildIdRef.current) return;
       setBuildStatus(data.status);
       setBuildActorName(resolveActorName(data.triggeredByUserId));
       if (!compilingRef.current) {
@@ -669,6 +686,9 @@ export function EditorLayout({
       setPdfLoading(true);
     },
     onBuildComplete: (data) => {
+      if (activeBuildIdRef.current && data.buildId !== activeBuildIdRef.current) return;
+      if (handledBuildIdsRef.current.has(data.buildId)) return;
+      handledBuildIdsRef.current.add(data.buildId);
       clearAllPolling();
 
       setBuildStatus(data.status);
@@ -984,6 +1004,7 @@ export function EditorLayout({
 
           const payload = (await res.json().catch(() => ({}))) as {
             buildQueued?: boolean;
+            buildId?: string;
             compileWarning?: string | null;
           };
           savedContentRef.current.set(fileId, content);
@@ -998,6 +1019,7 @@ export function EditorLayout({
           });
 
           if (willCompile && payload.buildQueued) {
+            activeBuildIdRef.current = payload.buildId ?? null;
             saveViewPositionsBeforeBuild();
             compilingRef.current = true;
             pendingRecompileRef.current = false;
@@ -1114,7 +1136,7 @@ export function EditorLayout({
     if (!activeFileId) return;
     if (!dirtyFileIds.has(activeFileId)) return;
     clearPendingSaveTimers(activeFileId);
-    void handleSave(activeFileId, activeFileContent, true);
+    void handleSave(activeFileId, activeFileContent, autoCompileEnabledRef.current);
   }, [
     activeFileId,
     activeFileContent,
@@ -1163,6 +1185,8 @@ export function EditorLayout({
         return;
       }
 
+      const payload = (await res.json().catch(() => ({}))) as { buildId?: string };
+      activeBuildIdRef.current = payload.buildId ?? null;
       startBuildPolling();
     } catch {
       setBuildStatus("error");
@@ -1359,11 +1383,18 @@ export function EditorLayout({
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.isContentEditable ||
+        target?.closest("input, textarea, select, [contenteditable=\"true\"]")
+      ) {
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
         handleCompile();
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         handleImmediateSave();
       }

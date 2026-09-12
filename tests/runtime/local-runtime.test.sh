@@ -6,7 +6,8 @@ source "$RUNTIME_ROOT/scripts/local-runtime.sh"
 
 for script in \
   start.sh stop.sh restart.sh reset.sh validate.sh \
-  production-start.sh production-stop.sh production-restart.sh; do
+  production-start.sh production-stop.sh production-restart.sh \
+  request-certificate.ps1 reload-caddy.ps1; do
   [ -f "$RUNTIME_ROOT/scripts/$script" ] || {
     printf 'missing runtime script: scripts/%s\n' "$script" >&2
     exit 1
@@ -52,6 +53,18 @@ fi
 
 grep -q 'load_environment_file ".env"' "$RUNTIME_ROOT/scripts/start.sh"
 grep -q 'load_environment_file ".env"' "$RUNTIME_ROOT/scripts/reset.sh"
+for template in .env.example .env.windows.example config/acme.example.json; do
+  [ -f "$RUNTIME_ROOT/$template" ] || {
+    printf 'missing configuration template: %s\n' "$template" >&2
+    exit 1
+  }
+done
+[ -f "$RUNTIME_ROOT/scripts/create-caddy-config.mjs" ] || {
+  printf 'missing Caddy configuration generator\n' >&2
+  exit 1
+}
+grep -q '^BACKSLASH_PROTOCOL=http$' "$RUNTIME_ROOT/.env.example"
+grep -q 'falling back to HTTP' "$RUNTIME_ROOT/scripts/start.sh"
 if grep -q 'source ".env"' "$RUNTIME_ROOT/scripts/start.sh" "$RUNTIME_ROOT/scripts/reset.sh"; then
   printf 'runtime script executes .env\n' >&2
   exit 1

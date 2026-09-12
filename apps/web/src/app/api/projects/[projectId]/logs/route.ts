@@ -3,11 +3,11 @@ import { db } from "@/lib/db";
 import { builds } from "@/lib/db/schema";
 import { resolveProjectAccess } from "@/lib/auth/project-access";
 import { parseLatexLog } from "@/lib/compiler/logParser";
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 
 // ─── GET /api/projects/[projectId]/logs ────────────
-// Get the latest build logs with parsed error entries.
+// Get build logs with parsed error entries. A buildId narrows the query for polling.
 
 export async function GET(
   request: NextRequest,
@@ -21,10 +21,15 @@ export async function GET(
       return NextResponse.json({ error: access.error }, { status: access.status });
     }
 
+    const buildId = request.nextUrl.searchParams.get("buildId");
     const [latestBuild] = await db
       .select()
       .from(builds)
-      .where(eq(builds.projectId, projectId))
+      .where(
+        buildId
+          ? and(eq(builds.projectId, projectId), eq(builds.id, buildId))
+          : eq(builds.projectId, projectId)
+      )
       .orderBy(desc(builds.createdAt))
       .limit(1);
 

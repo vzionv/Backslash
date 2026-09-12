@@ -1,0 +1,26 @@
+{
+  "wacsPath": "",
+  "domains": [
+    "example.com",
+    "*.example.com"
+  ],
+  "commonName": "example.com",
+  "validation": "Tencent",
+  "tencent": {
+    "apiId": "",
+    "apiKey": ""
+  },
+  "directory": "./.certificates/production",
+  "pemFileName": "example.com",
+  "staging": false,
+  "reloadScript": "./scripts/reload-caddy.ps1",
+  "createRenewalTask": true,
+  "caddyPath": "",
+  "caddyConfig": "",
+  "caddyAdapter": "json",
+  "httpsPort": 443,
+  "webUpstreamHost": "127.0.0.1",
+  "webUpstreamPort": 3000,
+  "wsUpstreamHost": "127.0.0.1",
+  "wsUpstreamPort": 3001
+}

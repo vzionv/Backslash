@@ -109,7 +109,44 @@ BACKSLASH_MODE=development bash scripts/start.sh
 
 The startup script validates the runtime, shared service key, and ports; starts the Web service; waits for the internal authorization endpoint; and then starts the WebSocket service.
 
-LAN clients must be able to reach `WEB_PORT` (default `3000`) and `WS_PORT` (default `3001`). `WEB_INTERNAL_PORT` and `WS_INTERNAL_PORT` must remain bound to loopback and must not be exposed publicly.
+### Deployment protocol and HTTPS
+
+The default deployment protocol is HTTP. This is the simplest option and does not require a domain, Caddy, a certificate, win-acme, or a DNS provider:
+
+```env
+BACKSLASH_PROTOCOL=http
+APP_URL=http://localhost:3000
+CORS_ORIGIN=http://localhost:3000
+```
+
+Set `BACKSLASH_PROTOCOL=https` only when HTTPS has been configured. The project uses Caddy as a local TLS reverse proxy: Caddy terminates TLS, sends web requests to the local Next.js port, and sends `/ws/*` to the local WebSocket port. Copy the values from `.env.example` or `.env.windows.example`, then configure the fields below:
+
+```env
+BACKSLASH_PROTOCOL=https
+BACKSLASH_HOST=your-domain.example
+HTTPS_PORT=443
+CADDY_PATH=/path/to/caddy
+CADDY_CONFIG=
+CADDY_ADAPTER=json
+CERTIFICATE_FILE=./.certificates/production/your-domain.example-chain.pem
+PRIVATE_KEY_FILE=./.certificates/production/your-domain.example-key.pem
+```
+
+Paths beginning with `./` are resolved from the project root. `CADDY_PATH` may be empty when `caddy` is already on `PATH`. If HTTPS is requested but Caddy, its configuration, the certificate chain, or the private key is unavailable, startup prints a warning and falls back to HTTP; HTTPS dependencies are not required for HTTP deployments.
+
+There are three supported HTTPS boundaries:
+
+1. **HTTP only:** configure `BACKSLASH_PROTOCOL=http`. No certificate or ACME tool is needed.
+2. **Existing certificate:** configure `BACKSLASH_PROTOCOL=https`, Caddy, `CERTIFICATE_FILE`, and `PRIVATE_KEY_FILE`. You do not need win-acme, Tencent Cloud credentials, or automatic renewal.
+3. **Automatic ACME issuance and renewal:** copy `config/acme.example.json` to the ignored local file `.acme.json`, fill in your own domain, win-acme path, certificate directory, and DNS provider fields, then run `scripts/request-certificate.ps1`. This is optional and is not part of normal application startup.
+
+For automatic issuance, you need a domain whose DNS is managed by the selected provider. A normal certificate may use HTTP-01 validation, while a wildcard certificate such as `*.your-domain.example` requires DNS-01 validation. DNS-01 temporarily creates a TXT record under `_acme-challenge`. The included ACME script currently implements Tencent DNS validation; choose another ACME client outside this project if you need HTTP-01 or another DNS provider.
+
+The ACME template also contains optional `caddyPath`, `caddyConfig`, `caddyAdapter`, `httpsPort`, and upstream fields for renewal reload. It explains `wacsPath`, `domains`, `commonName`, `validation`, `tencent.apiId`, `tencent.apiKey`, `directory`, `pemFileName`, `reloadScript`, and `createRenewalTask`. Leave the Tencent fields unused unless you deliberately choose Tencent DNS validation. If you already have a certificate, configure its paths directly and do not install win-acme merely because the template exists.
+
+`https://127.0.0.1` can establish TLS only when the configured proxy provides a certificate fallback, but a public certificate for a domain does not contain `127.0.0.1` as a certificate name. Browsers will therefore warn about the hostname; use the domain covered by the certificate for normal access.
+
+In HTTP mode, LAN clients may reach `WEB_PORT` (default `3000`) and `WS_PORT` (default `3001`) when that is intentional. In HTTPS mode, the proxy is the external entry point and the web/WS upstreams should remain on loopback; `WEB_INTERNAL_PORT` and `WS_INTERNAL_PORT` must never be exposed publicly.
 
 ## Configuration
 
@@ -117,6 +154,18 @@ The complete configuration reference is available in `.env.example` and `.env.wi
 
 | Variable | Default | Purpose |
 |---|---:|---|
+| `BACKSLASH_PROTOCOL` | `http` | Selects HTTP or optional HTTPS reverse-proxy mode |
+| `BACKSLASH_HOST` | `localhost` | Hostname used by the HTTPS proxy site address |
+| `HTTPS_PORT` | `443` | Caddy HTTPS listener port |
+| `CADDY_PATH` | empty | Optional Caddy executable path; otherwise Caddy is searched on `PATH` |
+| `CADDY_CONFIG` | generated local JSON | Optional Caddy configuration path, relative to the project root |
+| `CADDY_ADAPTER` | `json` | `json` for the generated config, or another adapter for a custom config |
+| `CERTIFICATE_FILE` | empty | Existing PEM certificate-chain path for HTTPS |
+| `PRIVATE_KEY_FILE` | empty | Existing PEM private-key path for HTTPS |
+| `WEB_UPSTREAM_HOST` | `127.0.0.1` | HTTPS proxy upstream host for Next.js |
+| `WEB_UPSTREAM_PORT` | `3000` | HTTPS proxy upstream port for Next.js |
+| `WS_UPSTREAM_HOST` | `127.0.0.1` | HTTPS proxy upstream host for WebSocket |
+| `WS_UPSTREAM_PORT` | `3001` | HTTPS proxy upstream port for WebSocket |
 | `WEB_PORT` | `3000` | Next.js HTTP port |
 | `WS_PORT` | `3001` | Public Socket.IO port |
 | `WS_HOST` | `0.0.0.0` | Socket.IO listen address |
@@ -213,6 +262,7 @@ bash scripts/validate.sh
 
 Relevant documentation:
 
+- [Deployment and protocol configuration](docs/deployment.md)
 - [Windows TeX Live setup](docs/windows-latex-setup.md)
 - [Compilation and realtime architecture](docs/compile-architecture.md)
 - [Security boundary](docs/security-boundary.md)

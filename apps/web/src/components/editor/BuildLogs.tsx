@@ -210,10 +210,11 @@ export function BuildLogs({
                 const isError =
                   error.type === "error" || error.type === "fatal";
                 const isWarning = error.type === "warning";
+                const isInfo = !isError && !isWarning;
 
                 return (
                   <button
-                    key={index}
+                    key={`${error.type}-${error.file}-${error.line}-${index}`}
                     type="button"
                     onClick={() =>
                       onErrorClick?.(error.file, error.line)
@@ -221,20 +222,29 @@ export function BuildLogs({
                     className={cn(
                       "flex w-full items-start gap-2 px-4 py-2 text-left text-xs transition-colors hover:bg-bg-elevated/50",
                       isError && "bg-error/5",
-                      isWarning && "bg-warning/5"
+                      isWarning && "bg-warning/5",
+                      isInfo && "bg-bg-tertiary/40"
                     )}
                   >
                     {isError ? (
                       <XCircle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-error" />
-                    ) : (
+                    ) : isWarning ? (
                       <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-warning" />
+                    ) : (
+                      <span className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border border-text-muted text-center text-[9px] leading-3 text-text-muted">
+                        i
+                      </span>
                     )}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span
                           className={cn(
                             "font-medium",
-                            isError ? "text-error" : "text-warning"
+                            isError
+                              ? "text-error"
+                              : isWarning
+                                ? "text-warning"
+                                : "text-text-muted"
                           )}
                         >
                           {error.type}
@@ -258,9 +268,14 @@ export function BuildLogs({
 
           {/* Raw log output */}
           {logs && (
-            <pre className="whitespace-pre-wrap break-all p-4 font-mono text-xs text-text-muted leading-relaxed">
-              {logs}
-            </pre>
+            <details className="border-t border-border" open={errors.length === 0}>
+              <summary className="cursor-pointer px-4 py-2 text-xs font-medium text-text-muted hover:bg-bg-elevated/50">
+                Raw compiler output
+              </summary>
+              <pre className="whitespace-pre-wrap break-all px-4 pb-4 font-mono text-xs text-text-muted leading-relaxed">
+                {logs}
+              </pre>
+            </details>
           )}
           <div ref={logEndRef} />
 

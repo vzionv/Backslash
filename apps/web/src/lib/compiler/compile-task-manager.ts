@@ -100,6 +100,11 @@ export class CompileTaskManager {
         this.cancelQueuedTask(queuedTask);
         return false;
       });
+      for (const activeTask of this.state.active.values()) {
+        if (activeTask.deduplicationKey === task.deduplicationKey) {
+          activeTask.abortController.abort();
+        }
+      }
     }
 
     if (this.state.queue.length >= this.maxQueued) {

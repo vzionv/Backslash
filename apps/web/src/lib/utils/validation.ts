@@ -85,4 +85,5 @@ export const updateFileSchema = z.object({
 
 export const renameFileSchema = z.object({
   newPath: z.string().min(1).max(1000),
+  conflict: z.enum(["overwrite", "rename", "cancel"]).optional().default("cancel"),
 });

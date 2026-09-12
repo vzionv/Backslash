@@ -1,0 +1,47 @@
+{
+  "admin": {
+    "listen": "{$CADDY_ADMIN}"
+  },
+  "apps": {
+    "tls": {
+      "certificates": {
+        "load_files": [
+          {
+            "certificate": "{$CERTIFICATE_FILE}",
+            "key": "{$PRIVATE_KEY_FILE}"
+          }
+        ]
+      }
+    },
+    "http": {
+      "servers": {
+        "backslash": {
+          "listen": [":{$HTTPS_PORT}"],
+          "automatic_https": {
+            "disable": true
+          },
+          "routes": [
+            {
+              "match": [{"path": ["/ws/*"]}],
+              "handle": [
+                {"handler": "rewrite", "strip_path_prefix": "/ws"},
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [{"dial": "{$WS_UPSTREAM_HOST}:{$WS_UPSTREAM_PORT}"}]
+                }
+              ]
+            },
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [{"dial": "{$WEB_UPSTREAM_HOST}:{$WEB_UPSTREAM_PORT}"}]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

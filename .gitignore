@@ -12,6 +12,11 @@ dist/
 .env.local
 .env.prod
 .env.production
+.acme.env
+.acme.json
+
+# TLS certificates
+.certificates/
 
 # OS
 .DS_Store
@@ -31,6 +36,7 @@ yarn-error.log*
 /data/
 apps/web/data/
 .backslash-*.pid
+.backslash-caddy.json
 
 # AI tooling
 graphify-out/

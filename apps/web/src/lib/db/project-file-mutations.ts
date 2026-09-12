@@ -75,11 +75,21 @@ export function updateProjectFilesAfterBatchWrite(options: {
 export function applyProjectFileRename(options: {
   projectId: string;
   updates: RenameDatabaseUpdate[];
+  deleteIds?: string[];
   previousMainFile: string;
   nextMainFile: string;
   updatedAt: string;
 }): void {
   withSqliteTransaction((database) => {
+    if (options.deleteIds && options.deleteIds.length > 0) {
+      const deleteStatement = database.prepare(
+        "DELETE FROM project_files WHERE id = ? AND project_id = ?"
+      );
+      for (const fileId of options.deleteIds) {
+        deleteStatement.run(fileId, options.projectId);
+      }
+    }
+
     const statement = database.prepare(
       "UPDATE project_files SET path = ?, updated_at = ? " +
         "WHERE id = ? AND project_id = ?"

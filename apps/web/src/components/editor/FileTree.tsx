@@ -332,6 +332,7 @@ interface TreeNodeItemProps {
   onDragStartInternal: (fileId: string, filePath: string) => void;
   onDragEndInternal: () => void;
   onDragOverFolder: (folderPath: string) => void;
+  onDropExternalFiles: (dataTransfer: DataTransfer, targetPath: string) => void;
   onDropOnFolder: (fileId: string, filePath: string, targetPath: string) => void;
 }
 
@@ -352,6 +353,7 @@ function TreeNodeItem({
   onDragStartInternal,
   onDragEndInternal,
   onDragOverFolder,
+  onDropExternalFiles,
   onDropOnFolder,
 }: TreeNodeItemProps) {
   const [expanded, setExpanded] = useState(depth < 1);
@@ -426,22 +428,30 @@ function TreeNodeItem({
         }}
         onDragEnd={onDragEndInternal}
         onDragOver={(e) => {
-          if (!node.isDirectory) return;
-          if (e.dataTransfer.types.includes("application/x-backslash-file-id")) {
-            e.preventDefault();
-            e.stopPropagation();
-            e.dataTransfer.dropEffect = "move";
-            onDragOverFolder(node.path);
-          }
+          const isInternal = e.dataTransfer.types.includes("application/x-backslash-file-id");
+          const isExternal = e.dataTransfer.types.includes("Files");
+          if (!isInternal && !isExternal) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const targetPath = node.isDirectory ? node.path : getParentPath(node.path);
+          e.dataTransfer.dropEffect = isInternal ? "move" : "copy";
+          onDragOverFolder(targetPath);
         }}
         onDrop={(e) => {
-          if (!node.isDirectory) return;
           const fId = e.dataTransfer.getData("application/x-backslash-file-id");
           const fPath = e.dataTransfer.getData("application/x-backslash-file-path");
           if (fId && fPath) {
             e.preventDefault();
             e.stopPropagation();
-            onDropOnFolder(fId, fPath, node.path);
+            const targetPath = node.isDirectory ? node.path : getParentPath(node.path);
+            onDropOnFolder(fId, fPath, targetPath);
+            return;
+          }
+          if (e.dataTransfer.types.includes("Files")) {
+            e.preventDefault();
+            e.stopPropagation();
+            const targetPath = node.isDirectory ? node.path : getParentPath(node.path);
+            onDropExternalFiles(e.dataTransfer, targetPath);
           }
         }}
         className={cn(
@@ -526,6 +536,7 @@ function TreeNodeItem({
               onDragStartInternal={onDragStartInternal}
               onDragEndInternal={onDragEndInternal}
               onDragOverFolder={onDragOverFolder}
+              onDropExternalFiles={onDropExternalFiles}
               onDropOnFolder={onDropOnFolder}
             />
           ))}
@@ -570,6 +581,11 @@ export function FileTree({
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ fileId: string } | null>(null);
   const [alertMessage, setAlertMessage] = useState<string | null>(null);
+  const [conflictAction, setConflictAction] = useState<
+    | { kind: "move"; fileId: string; newPath: string }
+    | { kind: "upload"; entries: { file: File; path: string }[]; targetPath: string }
+    | null
+  >(null);
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
   const [lastClickedFileId, setLastClickedFileId] = useState<string | null>(null);
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState<Set<string> | null>(null);
@@ -785,14 +801,14 @@ export function FileTree({
   // ─── Rename API call ──────────────────────────────
 
   const handleMove = useCallback(
-    async (fileId: string, newPath: string) => {
+    async (fileId: string, newPath: string, conflict: "overwrite" | "rename" | "cancel" = "cancel") => {
       try {
         const res = await fetch(
           withShareToken(`/api/projects/${projectId}/files/${fileId}`),
           {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ newPath }),
+            body: JSON.stringify({ newPath, conflict }),
           }
         );
         if (res.ok) {
@@ -801,9 +817,16 @@ export function FileTree({
             onMainFileChange(data.mainFile);
           }
           onFilesChanged();
+          return;
         }
+        if (res.status === 409 && conflict === "cancel") {
+          setConflictAction({ kind: "move", fileId, newPath });
+          return;
+        }
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        setAlertMessage(data.error ?? "Unable to move file");
       } catch {
-        // Silently fail
+        setAlertMessage("Unable to move file");
       }
     },
     [onFilesChanged, onMainFileChange, projectId, withShareToken]
@@ -844,7 +867,11 @@ export function FileTree({
   // ─── File upload via drag-and-drop from OS ────────
 
   const uploadFiles = useCallback(
-    async (fileEntries: { file: File; path: string }[]) => {
+    async (
+      fileEntries: { file: File; path: string }[],
+      targetFolderPath = "",
+      conflict: "overwrite" | "rename" | "cancel" = "cancel"
+    ) => {
       if (fileEntries.length === 0) return;
       setUploading(true);
 
@@ -852,12 +879,13 @@ export function FileTree({
         const formData = new FormData();
 
         for (const entry of fileEntries) {
+          const path = targetFolderPath ? `${targetFolderPath}/${entry.path}` : entry.path;
           formData.append("files", entry.file);
-          formData.append("paths", entry.path);
+          formData.append("paths", path);
         }
 
         const res = await fetch(
-          withShareToken(`/api/projects/${projectId}/files/upload`),
+          withShareToken(`/api/projects/${projectId}/files/upload?conflict=${conflict}`),
           {
             method: "POST",
             body: formData,
@@ -866,14 +894,39 @@ export function FileTree({
 
         if (res.ok) {
           onFilesChanged();
+          return;
         }
+        if (res.status === 409 && conflict === "cancel") {
+          setConflictAction({
+            kind: "upload",
+            entries: fileEntries,
+            targetPath: targetFolderPath,
+          });
+          return;
+        }
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        setAlertMessage(data.error ?? "Unable to upload files");
       } catch {
-        // Silently fail
+        setAlertMessage("Unable to upload files");
       } finally {
         setUploading(false);
       }
     },
     [onFilesChanged, projectId, withShareToken]
+  );
+
+  const handleDropExternalFiles = useCallback(
+    async (dataTransfer: DataTransfer, targetFolderPath: string) => {
+      setDropTargetPath(null);
+      setIsDraggingOver(false);
+      const entries = await collectDroppedFiles(dataTransfer);
+      const hasDirectoryRoot = entries.some((entry) => entry.path.includes("/"));
+      const normalizedEntries = hasDirectoryRoot
+        ? entries
+        : entries.map((entry) => ({ ...entry, path: entry.file.name }));
+      await uploadFiles(normalizedEntries, targetFolderPath);
+    },
+    [uploadFiles]
   );
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
@@ -926,7 +979,10 @@ export function FileTree({
 
       // External files — supports folders via FileSystemEntry API
       const entries = await collectDroppedFiles(e.dataTransfer);
-      uploadFiles(entries);
+      const normalizedEntries = entries.some((entry) => entry.path.includes("/"))
+        ? entries
+        : entries.map((entry) => ({ ...entry, path: entry.file.name }));
+      uploadFiles(normalizedEntries);
     },
     [uploadFiles, handleMove]
   );
@@ -1222,6 +1278,7 @@ export function FileTree({
             onDragStartInternal={handleInternalDragStart}
             onDragEndInternal={handleInternalDragEnd}
             onDragOverFolder={handleDragOverFolder}
+            onDropExternalFiles={handleDropExternalFiles}
             onDropOnFolder={handleDropOnFolder}
           />
         ))}
@@ -1290,6 +1347,37 @@ export function FileTree({
         variant="danger"
         onConfirm={confirmBulkDelete}
         onCancel={() => setBulkDeleteConfirm(null)}
+      />
+
+      {/* Alert dialog */}
+      <ConfirmDialog
+        open={conflictAction !== null}
+        title="File already exists"
+        message="A file with the same name already exists in the target folder. Choose how to continue."
+        confirmLabel="Overwrite"
+        secondaryLabel="Auto-rename"
+        variant="danger"
+        onConfirm={() => {
+          const action = conflictAction;
+          setConflictAction(null);
+          if (!action) return;
+          if (action.kind === "move") {
+            void handleMove(action.fileId, action.newPath, "overwrite");
+          } else {
+            void uploadFiles(action.entries, action.targetPath, "overwrite");
+          }
+        }}
+        onSecondary={() => {
+          const action = conflictAction;
+          setConflictAction(null);
+          if (!action) return;
+          if (action.kind === "move") {
+            void handleMove(action.fileId, action.newPath, "rename");
+          } else {
+            void uploadFiles(action.entries, action.targetPath, "rename");
+          }
+        }}
+        onCancel={() => setConflictAction(null)}
       />
 
       {/* Alert dialog */}

@@ -3,6 +3,7 @@
 RUNTIME_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WEB_PID_FILE="$RUNTIME_ROOT/.backslash-web.pid"
 WS_PID_FILE="$RUNTIME_ROOT/.backslash-ws.pid"
+CADDY_PID_FILE="$RUNTIME_ROOT/.backslash-caddy.pid"
 
 load_environment_file() {
   local environment_file="$1"
@@ -63,7 +64,9 @@ stop_managed_process() {
   [ -f "$pid_file" ] || return 0
 
   local pid
-  pid="$(tr -d '[:space:]' < "$pid_file")"
+  if ! pid="$(tr -d '[:space:]' < "$pid_file" 2>/dev/null)"; then
+    return 0
+  fi
   rm -f "$pid_file"
   if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
     printf 'WARN Invalid %s PID file ignored\n' "$service_name" >&2
@@ -74,12 +77,11 @@ stop_managed_process() {
   fi
 
   printf 'Stopping %s (PID %s)...\n' "$service_name" "$pid"
-  if is_windows_shell && command -v taskkill >/dev/null 2>&1; then
-    taskkill //PID "$pid" //T //F >/dev/null 2>&1 || true
-    return 0
+  if is_windows_shell; then
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+  else
+    terminate_posix_tree "$pid"
   fi
-
-  terminate_posix_tree "$pid"
   local attempt=0
   while process_exists "$pid" && [ "$attempt" -lt 50 ]; do
     sleep 0.1
@@ -91,6 +93,7 @@ stop_managed_process() {
 }
 
 stop_backslash_services() {
+  stop_managed_process "$CADDY_PID_FILE" "HTTPS proxy"
   stop_managed_process "$WEB_PID_FILE" "web server"
   stop_managed_process "$WS_PID_FILE" "WebSocket server"
 }
